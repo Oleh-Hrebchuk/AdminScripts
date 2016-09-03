@@ -24,7 +24,8 @@ except:
 
 if total < 6 or total > 6:
         print ("Params: dir_log, port_scann, host_scann, service_name, name_log")
-
+#3389/tcp open  ms-wbt-server
+#port           servicename
 nmap_params = "nmap -sT -Pn -n -p {} {}".format(port,host)
 pattern = re.compile(r"^{}/tcp.(\w*).{}$".format(port,serviname))
 get_status = subprocess.check_output("{}".format(nmap_params),
