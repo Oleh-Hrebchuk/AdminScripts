@@ -16,14 +16,14 @@ try:
     namelog = str(argv[5])
 
 except:
-    dir = os.chdir('/var')
+    dir = os.chdir('/var/')
     port = "3389"
     host = "127.0.0.1"
     serviname = "ms-wbt-server"
     namelog = "log.txt"
 
 if total < 6 or total > 6:
-    print ("Params: dir_log, port_scann, host_scann, service_name, name_log")
+    print ("Params: /dir_log/, port_scann, host_scann, service_name, name_log")
 
 nmap_params = "nmap -sT -Pn -n -p {} {}".format(port, host)
 pattern = re.compile(r"^{}/tcp.(\w+).?{}$".format(port, serviname))
