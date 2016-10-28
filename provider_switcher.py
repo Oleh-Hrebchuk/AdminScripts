@@ -283,7 +283,7 @@ class CheckChannelServer(FileManagement, MailSender):
         This method switch from primary provider to reserve provider and restart shorewall and ipsec on remote regions.
         :return:
         """
-        if self.ping(self.ip_prim_loc_alias, '8.8.8.4') == 0:
+        if self.ping(self.ip_prim_loc_alias, self.ping_google_ns) == 0:
             self.write_log_status(self.path_log_primary, '0')
         else:
             self.write_log_status(self.path_log_primary, '1')
