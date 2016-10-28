@@ -336,7 +336,7 @@ class CheckChannelServer(FileManagement, MailSender):
                     self.write_log_status(self.path_log_primary, '1')
 
 
-dict_reg = {'lviv': ['8.8.8.8', '172.25.61.100', '172.25.61.80'], 'if': ['172.25.61.64', '8.8.8.8']}
+dict_reg = {'lviv': ['8.8.8.8', '192.2.1.100', '192.2.1.80'], 'if': ['192.2.1.64', '8.8.8.8']}
 
 b = CheckChannelServer(ping_vpn='192.2.0.3', ping_google_ns='8.8.8.8', eth_primary='eth0', eth_reserve='eth2',
                        ip_gate_primary='prov1', ip_gate_reserve='prov2',
