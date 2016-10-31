@@ -373,16 +373,7 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
                     self.write_log_status(self.path_log_primary, '1')
 
 
-<<<<<<< HEAD
 b = ChangeProvider()
-=======
-dict_reg = {'lviv': ['8.8.8.8', '192.2.1.100', '192.2.1.80'], 'if': ['192.2.1.64', '8.8.8.8']}
-
-b = CheckChannelServer(ping_vpn='192.2.0.3', ping_google_ns='8.8.8.8', eth_primary='eth0', eth_reserve='eth2',
-                       ip_gate_primary='prov1', ip_gate_reserve='prov2',
-                       ip_prim_loc_alias='192.2.1.118',
-                       ip_reserve_loc_alias='192.2.1.82', regions=dict_reg, alpha='192.2.1.126')
->>>>>>> 559e8884faf8ec5e24101373de1d9d8b9bffe999
 
 if 'prov1' in b.read_file(b.current_name_provider):
     b.switch_to_reserve()
