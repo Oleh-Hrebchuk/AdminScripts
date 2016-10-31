@@ -109,7 +109,7 @@ class CheckChannel(object):
 
 
 class SSHManager(FileManagement):
-    def create_ssh_conection(self, host, user):
+    def create_ssh_connection(self, host, user):
         """
         Frame of ssh conection
         :param host: to connect
@@ -137,7 +137,7 @@ class SSHManager(FileManagement):
         :return: return None
         """
         try:
-            ssh_connect = self.create_ssh_conection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, self.login)
             sftp = ssh_connect.open_sftp()
             with sftp.open('{}'.format(path_file), 'r')as file_edit:
                 text = file_edit.read()
@@ -161,7 +161,7 @@ class SSHManager(FileManagement):
         :return: None
         """
         try:
-            ssh_connect = self.create_ssh_conection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, self.login)
             sftp = ssh_connect.open_sftp()
             sftp.put(src_dir, dst_dir)
             sftp.close()
@@ -182,7 +182,7 @@ class SSHManager(FileManagement):
         :return: None
         """
         try:
-            ssh_connect = self.create_ssh_conection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, self.login)
             if check == 'yes':
                 stdin, stdout, stderr = ssh_connect.exec_command('/etc/init.d/{} check'.format(name_service))
                 if 'Shorewall configuration verified' in stdout.read():
@@ -209,7 +209,7 @@ class SSHManager(FileManagement):
         """
         old_word = ''
         try:
-            ssh_connect = self.create_ssh_conection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, self.login)
             sftp = ssh_connect.open_sftp()
             with sftp.open('{}'.format(path_file), 'r')as file_edit:
                 text = file_edit.read()
@@ -217,12 +217,9 @@ class SSHManager(FileManagement):
                 if 'left =' in line:
                     old_word = line[line.index(word_index) + len(word_index):]
                     break
-                else:
-                    self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str('not find provider for replace')
-                                     + ' ' + host + '\n')
             if old_word != '':
                 with sftp.open('{}'.format(path_file), 'w')as file_edit2:
-                    file_edit2.write(text.replace(old_word, replace_word))
+                    file_edit2.write(text.replace(old_word+'\n', replace_word+'\n'))
             else:
                 self.add_to_file(self.error_log, str(self.date_log()) +
                                  ' ' + 'Not found provider for replace' + ' ' + host + '\n')
@@ -244,14 +241,12 @@ class SSHManager(FileManagement):
         :return: None
         """
         old_word = ''
-        ssh = paramiko.SSHClient()
-        ssh.load_system_host_keys()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        new_state = self.read_file('/opt/template-vpn/log/current-state.txt')
         for reg in self.regions:
             for host in self.regions[reg]:
                 if self.check_open_sockets(host, 22) is True:
                     try:
-                        ssh.connect(host, 22, username='root', key_filename='/root/.ssh/id_rsa')
+                        ssh = self.create_ssh_connection(host, self.login)
                         sftp = ssh.open_sftp()
                         with sftp.open('{}'.format(path_file), 'r')as file_edit:
                             text = file_edit.read()
@@ -264,19 +259,18 @@ class SSHManager(FileManagement):
                                         pass
                         if old_word != '':
                             with sftp.open('{}'.format(path_file), 'w')as file_edit2:
-                                file_edit2.write(
-                                    text.replace(old_word, self.read_file
-                                    ('/opt/template-vpn/log/current-state.txt')))
+                                file_edit2.write(text.replace(old_word+'\n', new_state+'\n'))
                         else:
-                            self.add_to_file(self.error_log, str(self.date_log()) +
-                                             ' ' + 'Not found provider for replace' + ' ' + host + '\n')
                             self.send_mail('Trigger: Script execution error', 'Not found provider for replace')
                         sftp.close()
                     except Exception, e:
                         self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
                         self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                                        format(str(e)))
-                    ssh.close()
+
+                    finally:
+                        if ssh:
+                            ssh.close()
             else:
                 continue
 
@@ -284,7 +278,6 @@ class SSHManager(FileManagement):
 class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
     def __init__(self):
         """
-
         :param ping_vpn: This variable is ip which we check if vpn is alive.
         :param ping_google_ns: google dns for check if provider is alive
         :param eth_primary: eth0 which change on alpha
@@ -294,10 +287,9 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
         :param eth_prim_local: ip alias primary local beta
         :param eth_reserve_loc: ip alias reserver local beta
         :param regions: list regions providers
-        :param alpha: ip local alpha
-        :return:
+        :param alpha: ip local gate
+        :return: None
         """
-
         self.ping_google_ns = self.get_value_confing('local-providers', 'ping_vpn')
         self.eth_primary = self.get_value_confing('local-providers', 'eth_primary')
         self.eth_reserve = self.get_value_confing('local-providers', 'eth_reserve')
@@ -374,7 +366,6 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
 
 
 b = ChangeProvider()
-
 if 'prov1' in b.read_file(b.current_name_provider):
     b.switch_to_reserve()
     print 'sw to reserve'
@@ -383,4 +374,3 @@ elif 'prov2' in b.read_file(b.current_name_provider):
     print 'sw to primary'
 else:
     pass
-
