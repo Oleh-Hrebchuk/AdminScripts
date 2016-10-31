@@ -4,13 +4,14 @@ import socket
 import smtplib
 from email.mime.text import MIMEText
 import datetime
+import ConfigParser
+import ast
 
 
 class FileManagement(object):
     def add_to_file(self, path, res):
-        f = open('{}'.format(path), 'a')
-        f.write(res)
-        f.close()
+        with open('{}'.format(path), 'a') as f:
+            f.write(res)
 
     def write_file_w(self, path, res):
         with open('{}'.format(path), 'w')as f:
@@ -34,69 +35,49 @@ class FileManagement(object):
         else:
             self.add_to_file('{}'.format(path), res)
 
+    def date_log(self):
+        return datetime.datetime.today().strftime("%y-%m-%d %H:%M")
 
-class MailSender(object):
+
+class GetConfig(object):
+    def get_value_confing(self, section, key):
+        configParser = ConfigParser.RawConfigParser()
+        configFilePath = r'/opt/template-vpn/provider.conf'
+        configParser.read(configFilePath)
+        value = configParser.get(section, key)
+        return value
+
+    def get_dict_config(self, section, key):
+        return ast.literal_eval(self.get_value_confing(section, key))
+
+    def get_list_config(self, section, key):
+        return [val.strip() for val in self.get_value_confing(section, key).split(',')]
+
+
+class MailSender(FileManagement, GetConfig):
     def send_mail(self, subject_mail, message):
-        user = 'oleh.hrebchuk@gmail.com'
-        pwd = ''
-        FROM = user
-        TO = 'oleh.hrebchuk@eleks.com'
+        user = self.get_value_confing('mail', 'user')
+        pwd = self.get_value_confing('mail', 'pwd')
+        FROM = self.get_value_confing('mail', 'from')
+        TO = self.get_value_confing('mail', 'to')
+        smtp_server = self.get_value_confing('mail', 'smtp_server')
+        smtp_port = self.get_value_confing('mail', 'smtp_port')
         msg = MIMEText('{}'.format(message))
         msg['From'] = user
         msg['To'] = TO
         msg['Subject'] = subject_mail
         try:
-            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server = smtplib.SMTP(smtp_server, smtp_port)
             server.ehlo()
             server.starttls()
             server.login(user, pwd)
             server.sendmail(FROM, TO, msg.as_string())
             server.quit()
         except Exception as e:
-            print e
+            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + '\n')
 
 
-class CheckChannelServer(FileManagement, MailSender):
-    # Static vars
-    path_log_primary = '/opt/template-vpn/log/log.txt'
-    current_name_provider = '/opt/template-vpn/log/current-state.txt'
-    path_time = '/opt/template-vpn/log/time.log'
-    path_ipsec = '/opt/template-vpn/ternopil/uarnet/ipsec.conf'
-    # providers which replace right
-    list_providers = ['prov1', 'prov2']
-    error_log = '/opt/template-vpn/log/error.log'
-    login = 'root'
-
-    def __init__(self, ping_vpn, ping_google_ns, eth_primary, eth_reserve, ip_gate_primary, ip_gate_reserve,
-                 ip_prim_loc_alias, ip_reserve_loc_alias, regions, alpha):
-        """
-
-        :param ping_vpn: This variable is ip which we check if vpn is alive.
-        :param ping_google_ns: google dns for check if provider is alive
-        :param eth_primary: eth0 which change on alpha
-        :param eth_reserve: eth0:0 reserve gateway
-        :param ip_gate_primary: ip primary provider
-        :param ip_gate_reserve: ip reserver provider
-        :param eth_prim_local: ip alias primary local beta
-        :param eth_reserve_loc: ip alias reserver local beta
-        :param regions: list regions providers
-        :param alpha: ip local alpha
-        :return:
-        """
-        self.ping_vpn = ping_vpn
-        self.ping_google_ns = ping_google_ns
-        self.eth_primary = eth_primary
-        self.eth_reserve = eth_reserve
-        self.ip_gate_primary = ip_gate_primary
-        self.ip_gate_reserve = ip_gate_reserve
-        self.ip_prim_loc_alias = ip_prim_loc_alias
-        self.ip_reserve_loc_alias = ip_reserve_loc_alias
-        self.regions = regions
-        self.alpha = alpha
-
-    def date_log(self):
-        return datetime.datetime.today().strftime("%y-%m-%d %H:%M")
-
+class CheckChannel(object):
     def check_open_sockets(self, host, port):
         """
         This method check if server port is listen
@@ -113,6 +94,21 @@ class CheckChannelServer(FileManagement, MailSender):
         else:
             return True
 
+    def ping(self, eth, host):
+        """
+        Chack if host is alive
+        :param eth: ping from alias
+        :param host: ping host
+        :return: 1 or 0
+        """
+        response = os.system('ping -c 1 -W 1 -I {} {} > /dev/null'.format(eth, host))
+        if response == 0:
+            return 0
+        else:
+            return 1
+
+
+class SSHManager(FileManagement):
     def create_ssh_conection(self, host, user):
         """
         Frame of ssh conection
@@ -120,11 +116,16 @@ class CheckChannelServer(FileManagement, MailSender):
         :param user: user
         :return: return ssh_conect
         """
-        ssh = paramiko.SSHClient()
-        ssh.load_system_host_keys()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(host, 22, username=user, key_filename='/root/.ssh/id_rsa')
-        return ssh
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.load_system_host_keys()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(host, 22, username=user, key_filename='/root/.ssh/id_rsa')
+            return ssh
+        except Exception as e:
+            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+            self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
+                           format(str(e)))
 
     def ssh_replace_data(self, host, path_file, old_word, replace_word):
         """
@@ -216,8 +217,16 @@ class CheckChannelServer(FileManagement, MailSender):
                 if 'left =' in line:
                     old_word = line[line.index(word_index) + len(word_index):]
                     break
-            with sftp.open('{}'.format(path_file), 'w')as file_edit:
-                file_edit.write(text.replace(old_word, replace_word))
+                else:
+                    self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str('not find provider for replace')
+                                     + ' ' + host + '\n')
+            if old_word != '':
+                with sftp.open('{}'.format(path_file), 'w')as file_edit2:
+                    file_edit2.write(text.replace(old_word, replace_word))
+            else:
+                self.add_to_file(self.error_log, str(self.date_log()) +
+                                 ' ' + 'Not found provider for replace' + ' ' + host + '\n')
+                self.send_mail('Trigger: Script execution error', 'Not found provider for replace')
             sftp.close()
         except Exception as e:
             self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
@@ -253,10 +262,16 @@ class CheckChannelServer(FileManagement, MailSender):
                                         break
                                     else:
                                         pass
-                        with sftp.open('{}'.format(path_file), 'w')as file_edit:
-                            file_edit.write(
-                                text.replace(old_word, self.read_file('/opt/template-vpn/log/current-state.txt')))
-                            sftp.close()
+                        if old_word != '':
+                            with sftp.open('{}'.format(path_file), 'w')as file_edit2:
+                                file_edit2.write(
+                                    text.replace(old_word, self.read_file
+                                    ('/opt/template-vpn/log/current-state.txt')))
+                        else:
+                            self.add_to_file(self.error_log, str(self.date_log()) +
+                                             ' ' + 'Not found provider for replace' + ' ' + host + '\n')
+                            self.send_mail('Trigger: Script execution error', 'Not found provider for replace')
+                        sftp.close()
                     except Exception, e:
                         self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
                         self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
@@ -265,25 +280,47 @@ class CheckChannelServer(FileManagement, MailSender):
             else:
                 continue
 
-    def ping(self, eth, host):
+
+class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
+    def __init__(self):
         """
-        Chack if host is alive
-        :param eth: ping from alias
-        :param host: ping host
-        :return: 1 or 0
+
+        :param ping_vpn: This variable is ip which we check if vpn is alive.
+        :param ping_google_ns: google dns for check if provider is alive
+        :param eth_primary: eth0 which change on alpha
+        :param eth_reserve: eth0:0 reserve gateway
+        :param ip_gate_primary: ip primary provider
+        :param ip_gate_reserve: ip reserver provider
+        :param eth_prim_local: ip alias primary local beta
+        :param eth_reserve_loc: ip alias reserver local beta
+        :param regions: list regions providers
+        :param alpha: ip local alpha
+        :return:
         """
-        response = os.system('ping -c 1 -W 1 -I {} {} > /dev/null'.format(eth, host))
-        if response == 0:
-            return 0
-        else:
-            return 1
+
+        self.ping_google_ns = self.get_value_confing('local-providers', 'ping_vpn')
+        self.eth_primary = self.get_value_confing('local-providers', 'eth_primary')
+        self.eth_reserve = self.get_value_confing('local-providers', 'eth_reserve')
+        self.ip_gate_primary = self.get_value_confing('local-providers', 'ip_gate_primary')
+        self.ip_gate_reserve = self.get_value_confing('local-providers', 'ip_gate_reserve')
+        self.ip_prim_loc_alias = self.get_value_confing('local-providers', 'ip_prim_loc_alias')
+        self.ip_reserve_loc_alias = self.get_value_confing('local-providers', 'ip_reserve_loc_alias')
+        self.regions = self.get_dict_config('region-providers', 'dict_reg')
+        self.alpha = self.get_value_confing('local-providers', 'alpha')
+        self.list_providers = self.get_list_config('local-providers', 'list_providers')
+        self.path_log_primary = self.get_value_confing('work-file', 'path_log_primary')
+        self.current_name_provider = self.get_value_confing('work-file', 'current_name_provider')
+        self.path_time = self.get_value_confing('work-file', 'path_time')
+        self.path_ipsec = self.get_value_confing('work-file', 'path_ipsec')
+        self.error_log = self.get_value_confing('work-file', 'error_log')
+        self.login = self.get_value_confing('ssh', 'login')
 
     def switch_to_reserve(self):
         """
         This method switch from primary provider to reserve provider and restart shorewall and ipsec on remote regions.
         :return:
         """
-        if self.ping(self.ip_prim_loc_alias, self.ping_google_ns) == 0:
+        if self.ping(self.ip_prim_loc_alias, '8.8.8.4') == 0:
             self.write_log_status(self.path_log_primary, '0')
         else:
             self.write_log_status(self.path_log_primary, '1')
@@ -296,7 +333,7 @@ class CheckChannelServer(FileManagement, MailSender):
                 self.ssh_replace_right('/etc/ipsec.conf')
                 self.send_mail('Trigger: Moved to Reserve provider', 'Current provider: {}\n'.
                                format(self.read_file('/opt/template-vpn/log/current-state.txt')))
-                if self.ping(self.ip_prim_loc_alias, self.ping_vpn) == 0:
+                if self.ping(self.ip_prim_loc_alias, self.get_value_confing('local-providers', 'ping_vpn')) == 0:
                     pass
                 else:
                     self.write_file_w(self.current_name_provider, 'trigger')
@@ -336,12 +373,7 @@ class CheckChannelServer(FileManagement, MailSender):
                     self.write_log_status(self.path_log_primary, '1')
 
 
-dict_reg = {'lviv': ['8.8.8.8', '172.25.61.100', '172.25.61.80'], 'if': ['172.25.61.64', '8.8.8.8']}
-
-b = CheckChannelServer(ping_vpn='192.2.0.3', ping_google_ns='8.8.8.8', eth_primary='eth0', eth_reserve='eth2',
-                       ip_gate_primary='prov1', ip_gate_reserve='prov2',
-                       ip_prim_loc_alias='192.2.1.118',
-                       ip_reserve_loc_alias='192.2.1.82', regions=dict_reg, alpha='192.2.1.126')
+b = ChangeProvider()
 
 if 'prov1' in b.read_file(b.current_name_provider):
     b.switch_to_reserve()
@@ -351,3 +383,4 @@ elif 'prov2' in b.read_file(b.current_name_provider):
     print 'sw to primary'
 else:
     pass
+
