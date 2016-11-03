@@ -74,7 +74,7 @@ class MailSender(FileManagement, GetConfig):
             server.sendmail(FROM, TO, msg.as_string())
             server.quit()
         except Exception as e:
-            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + '\n')
+            self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + '\n')
 
 
 class CheckChannel(object):
@@ -107,9 +107,19 @@ class CheckChannel(object):
         else:
             return 1
 
+    def check_channel_vpn(self, list_vpn, eth, current_name_provider, triger):
+        data = {}
+        for host in list_vpn:
+            if self.ping(eth, host) == 0:
+                data[host] = 'Up'
+            else:
+                data[host] = 'Down'
+                self.write_file_w(current_name_provider, triger)
+        return data
+
 
 class SSHManager(FileManagement):
-    def create_ssh_connection(self, host, user):
+    def create_ssh_connection(self, host, user, key_filename):
         """
         Frame of ssh conection
         :param host: to connect
@@ -120,14 +130,14 @@ class SSHManager(FileManagement):
             ssh = paramiko.SSHClient()
             ssh.load_system_host_keys()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(host, 22, username=user, key_filename='/root/.ssh/id_rsa')
+            ssh.connect(host, 22, username=user, key_filename=key_filename)
             return ssh
         except Exception as e:
-            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+            self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
             self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                            format(str(e)))
 
-    def ssh_replace_data(self, host, path_file, old_word, replace_word):
+    def ssh_replace_data(self, host, path_file, old_word, replace_word, key_filename, login):
         """
         This method replace data via ssh in file
         :param host: host
@@ -137,7 +147,7 @@ class SSHManager(FileManagement):
         :return: return None
         """
         try:
-            ssh_connect = self.create_ssh_connection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, login, key_filename)
             sftp = ssh_connect.open_sftp()
             with sftp.open('{}'.format(path_file), 'r')as file_edit:
                 text = file_edit.read()
@@ -145,14 +155,14 @@ class SSHManager(FileManagement):
                 file_edit.write(text.replace(old_word, replace_word))
             sftp.close()
         except Exception as e:
-            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+            self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
             self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                            format(str(e)))
         finally:
             if ssh_connect:
                 ssh_connect.close()
 
-    def ssh_copy_file(self, host, src_dir, dst_dir):
+    def ssh_copy_file(self, host, src_dir, dst_dir, key_filename, login):
         """
         This method replace copy file to remote host
         :param host: host
@@ -161,43 +171,48 @@ class SSHManager(FileManagement):
         :return: None
         """
         try:
-            ssh_connect = self.create_ssh_connection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, login, key_filename)
             sftp = ssh_connect.open_sftp()
+            #backup tcrules
+            with sftp.open(dst_dir, 'r')as f:
+                data = f.read()
+            if 'tc-rulses-core' in data:
+                sftp.get(dst_dir, '/opt/template-vpn/tcrules')
             sftp.put(src_dir, dst_dir)
             sftp.close()
         except Exception as e:
-            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+            self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
             self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                            format(str(e)))
         finally:
             if ssh_connect:
                 ssh_connect.close()
 
-    def ssh_restart_service(self, host, name_service, check):
+    def ssh_restart_service(self, host, name_service, check, key_filename, login):
         """
-        This could restart shorewall via ssh with check (check:'yes') and other services without check service.
-        :param host: host
-        :param name_service: service of linux(ipsec or shorewall)
-        :param check: use 'yes' for check shorewall
-        :return: None
+            This could restart shorewall via ssh with check (check:'yes') and other services without check service.
+            :param host: host
+            :param name_service: service of linux(ipsec or shorewall)
+            :param check: use 'yes' for check shorewall
+            :return: None
         """
         try:
-            ssh_connect = self.create_ssh_connection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, login, key_filename)
             if check == 'yes':
                 stdin, stdout, stderr = ssh_connect.exec_command('/etc/init.d/{} check'.format(name_service))
                 if 'Shorewall configuration verified' in stdout.read():
-                    stdin, stdout, stderr = ssh_connect.exec_command('/etc/init.d/{} restart'.format(name_service))
+                    ssh_connect.exec_command('/etc/init.d/{} restart'.format(name_service))
             else:
-                stdin, stdout, stderr = ssh_connect.exec_command('/etc/init.d/{} restart'.format(name_service))
+                ssh_connect.exec_command('/etc/init.d/{} restart'.format(name_service))
         except Exception as e:
-            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+            self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
             self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                            format(str(e)))
         finally:
             if ssh_connect:
                 ssh_connect.close()
 
-    def ssh_replace_left(self, host, path_file, replace_word, word_index):
+    def ssh_replace_left(self, host, path_file, replace_word, word_index, key_filename, login):
         """
         This method replace in ipsec file. Find in file left ip which need replace.
         And replace left ip to new ip changed provider
@@ -209,7 +224,7 @@ class SSHManager(FileManagement):
         """
         old_word = ''
         try:
-            ssh_connect = self.create_ssh_connection(host, self.login)
+            ssh_connect = self.create_ssh_connection(host, login, key_filename)
             sftp = ssh_connect.open_sftp()
             with sftp.open('{}'.format(path_file), 'r')as file_edit:
                 text = file_edit.read()
@@ -219,21 +234,21 @@ class SSHManager(FileManagement):
                     break
             if old_word != '':
                 with sftp.open('{}'.format(path_file), 'w')as file_edit2:
-                    file_edit2.write(text.replace(old_word+'\n', replace_word+'\n'))
+                    file_edit2.write(text.replace(old_word + '\n', replace_word + '\n'))
             else:
-                self.add_to_file(self.error_log, str(self.date_log()) +
+                self.add_to_file(self.path_error_log, str(self.date_log()) +
                                  ' ' + 'Not found provider for replace' + ' ' + host + '\n')
                 self.send_mail('Trigger: Script execution error', 'Not found provider for replace')
             sftp.close()
         except Exception as e:
-            self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+            self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
             self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                            format(str(e)))
         finally:
             if ssh_connect:
                 ssh_connect.close()
 
-    def ssh_replace_right(self, path_file):
+    def ssh_replace_right(self, path_file, key_filename, login):
         """
         This method change configuratin via ssh 'right'. This get from current.log and set to right
          And this restart ipsec vpn.
@@ -246,7 +261,7 @@ class SSHManager(FileManagement):
             for host in self.regions[reg]:
                 if self.check_open_sockets(host, 22) is True:
                     try:
-                        ssh = self.create_ssh_connection(host, self.login)
+                        ssh = self.create_ssh_connection(host, login, key_filename)
                         sftp = ssh.open_sftp()
                         with sftp.open('{}'.format(path_file), 'r')as file_edit:
                             text = file_edit.read()
@@ -259,12 +274,13 @@ class SSHManager(FileManagement):
                                         pass
                         if old_word != '':
                             with sftp.open('{}'.format(path_file), 'w')as file_edit2:
-                                file_edit2.write(text.replace(old_word+'\n', new_state+'\n'))
+                                file_edit2.write(text.replace(old_word + '\n', new_state + '\n'))
+                                ssh.exec_command('/etc/init.d/ipsec restart')
                         else:
                             self.send_mail('Trigger: Script execution error', 'Not found provider for replace')
                         sftp.close()
                     except Exception, e:
-                        self.add_to_file(self.error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
+                        self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
                         self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                                        format(str(e)))
 
@@ -290,7 +306,7 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
         :param alpha: ip local gate
         :return: None
         """
-        self.ping_google_ns = self.get_value_confing('local-providers', 'ping_vpn')
+        self.ping_google_ns = self.get_value_confing('local-providers', 'ping_google_ns')
         self.eth_primary = self.get_value_confing('local-providers', 'eth_primary')
         self.eth_reserve = self.get_value_confing('local-providers', 'eth_reserve')
         self.ip_gate_primary = self.get_value_confing('local-providers', 'ip_gate_primary')
@@ -298,40 +314,45 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
         self.ip_prim_loc_alias = self.get_value_confing('local-providers', 'ip_prim_loc_alias')
         self.ip_reserve_loc_alias = self.get_value_confing('local-providers', 'ip_reserve_loc_alias')
         self.regions = self.get_dict_config('region-providers', 'dict_reg')
+        self.vpn_list = self.get_list_config('region-providers', 'vpn_list')
         self.alpha = self.get_value_confing('local-providers', 'alpha')
         self.list_providers = self.get_list_config('local-providers', 'list_providers')
-        self.path_log_primary = self.get_value_confing('work-file', 'path_log_primary')
-        self.current_name_provider = self.get_value_confing('work-file', 'current_name_provider')
-        self.path_time = self.get_value_confing('work-file', 'path_time')
-        self.path_ipsec = self.get_value_confing('work-file', 'path_ipsec')
-        self.error_log = self.get_value_confing('work-file', 'error_log')
         self.login = self.get_value_confing('ssh', 'login')
+        self.path_log_primary = self.get_value_confing('work-file', 'path_log_primary')
+        self.path_current_name_provider = self.get_value_confing('work-file', 'current_name_provider')
+        self.path_error_log = self.get_value_confing('work-file', 'error_log')
+        self.path_shorewall_hosts = self.get_value_confing('work-file', 'shorewall_hosts')
+        self.path_ipsec_conf = self.get_value_confing('work-file', 'ipsec_conf')
+        self.path_key_filename = self.get_value_confing('work-file', 'key_filename')
+        self.path_tcrules_wnet_t = self.get_value_confing('work-file', 'tcrules_wnet_t')
+        self.path_tcrules_uarnet_t = self.get_value_confing('work-file', 'tcrules_uarnet_t')
+        self.path_tcrules_t = self.get_value_confing('work-file', 'tcrules_t')
+        self.path_tcrules = self.get_value_confing('work-file', 'tcrules')
 
     def switch_to_reserve(self):
         """
         This method switch from primary provider to reserve provider and restart shorewall and ipsec on remote regions.
         :return:
         """
-        if self.ping(self.ip_prim_loc_alias, '8.8.8.4') == 0:
+        if self.ping(self.ip_prim_loc_alias, '8.8.8.3') == 0:
             self.write_log_status(self.path_log_primary, '0')
         else:
             self.write_log_status(self.path_log_primary, '1')
-            if self.ping(self.ip_prim_loc_alias, self.ping_google_ns) == 0:
-                self.ssh_replace_data(self.alpha, '/etc/shorewall/hosts', self.eth_primary, self.eth_reserve)
-                self.ssh_replace_left(self.alpha, '/etc/ipsec.conf', self.ip_gate_reserve, 'left = ')
-                self.write_file_w(self.current_name_provider, str(self.ip_gate_reserve))
-                self.ssh_copy_file(self.alpha, '/opt/template-vpn/tcrules_wnet', '/etc/shorewall/tcrules')
-                self.ssh_restart_service(self.alpha, 'cron', 'no')
-                self.ssh_replace_right('/etc/ipsec.conf')
+            if self.ping(self.ip_reserve_loc_alias, self.ping_google_ns) == 0:
+                self.ssh_replace_data(self.alpha, self.path_shorewall_hosts, self.eth_primary,
+                                      self.eth_reserve, self.path_key_filename, self.login)
+                self.ssh_replace_left(self.alpha, self.path_ipsec_conf, self.ip_gate_reserve, 'left = ',
+                                      self.path_key_filename, self.login)
+                self.write_file_w(self.path_current_name_provider, str(self.ip_gate_reserve))
+                self.ssh_copy_file(self.alpha, self.path_tcrules_wnet_t, self.path_tcrules, self.path_key_filename, self.login)
+                # self.ssh_restart_service(self.alpha, 'shorewall', 'yes')
+                # self.ssh_restart_service(self.alpha,'ipsec', 'no')
+                self.ssh_replace_right(self.path_ipsec_conf, self.path_key_filename, self.login)
                 self.send_mail('Trigger: Moved to Reserve provider', 'Current provider: {}\n'.
-                               format(self.read_file('/opt/template-vpn/log/current-state.txt')))
-                if self.ping(self.ip_prim_loc_alias, self.get_value_confing('local-providers', 'ping_vpn')) == 0:
-                    pass
-                else:
-                    self.write_file_w(self.current_name_provider, 'trigger')
-                    pass
-            else:
-                pass
+                               format(self.read_file(self.path_current_name_provider)))
+
+                self.send_mail('Trigger: Status VPN', 'Status VPN: Up\Down: {}\n'.format(self.check_channel_vpn(
+                    self.vpn_list, self.ip_reserve_loc_alias, self.path_current_name_provider, triger='triger')))
 
     def switch_to_primary(self):
         """
@@ -340,24 +361,34 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
         """
         if self.ping(self.ip_prim_loc_alias, self.ping_google_ns) == 0 and self.ping(self.ip_reserve_loc_alias,
                                                                                      self.ping_google_ns) == 1:
-            self.ssh_replace_data(self.alpha, '/etc/shorewall/hosts', self.eth_reserve, self.eth_primary)
-            self.ssh_replace_left(self.alpha, '/etc/ipsec.conf', self.ip_gate_primary, 'left = ')
-            self.write_file_w(self.current_name_provider, str(self.ip_gate_primary))
-            self.ssh_copy_file(self.alpha, '/opt/template-vpn/tcrules_uarnet', '/etc/shorewall/tcrules')
-            self.ssh_restart_service(self.alpha, 'cron', 'no')
-            self.ssh_replace_right('/etc/ipsec.conf')
+            self.ssh_replace_data(self.alpha, self.path_shorewall_hosts, self.eth_reserve, self.eth_primary,
+                                  self.path_key_filename, self.login)
+            self.ssh_replace_left(self.alpha, self.path_ipsec_conf, self.ip_gate_primary, 'left = ',
+                                  self.path_key_filename, self.login)
+            self.write_file_w(self.path_current_name_provider, str(self.ip_gate_primary))
+            self.ssh_copy_file(self.alpha, self.path_tcrules_uarnet_t, self.path_tcrules, self.path_key_filename, self.login)
+            # self.ssh_restart_service(self.alpha, 'shorewall', 'yes')
+            # self.ssh_restart_service(self.alpha, 'ipsec', 'no')
+            self.ssh_replace_right(self.path_ipsec_conf, self.path_key_filename, self.login)
             self.send_mail('Trigger: Moved to Primary provider immediately', 'Current provider: {}\n'.
-                           format(self.read_file('/opt/template-vpn/log/current-state.txt')))
+                           format(self.read_file(self.path_current_name_provider)))
+            self.send_mail('Trigger: Status VPN', 'Status VPN: Up\Down: {}\n'.format(self.check_channel_vpn(
+                self.vpn_list, self.ip_reserve_loc_alias, self.path_current_name_provider, triger='triger')))
         else:
             if '1' not in self.read_file(self.path_log_primary):
-                self.ssh_replace_data(self.alpha, '/etc/shorewall/hosts', self.eth_reserve, self.eth_primary)
-                self.ssh_replace_left(self.alpha, '/etc/ipsec.conf', self.ip_gate_primary, 'left = ')
-                self.write_file_w(self.current_name_provider, str(self.ip_gate_primary))
-                self.ssh_copy_file(self.alpha, '/opt/template-vpn/tcrules', '/etc/shorewall/tcrules')
-                self.ssh_restart_service(self.alpha, 'cron', 'no')
-                self.ssh_replace_right('/etc/ipsec.conf')
+                self.ssh_replace_data(self.alpha, self.path_shorewall_hosts, self.eth_reserve, self.eth_primary,
+                                      self.path_key_filename, self.login)
+                self.ssh_replace_left(self.alpha, self.path_ipsec_conf, self.ip_gate_primary, 'left = ',
+                                      self.path_key_filename, self.login)
+                self.write_file_w(self.path_current_name_provider, str(self.ip_gate_primary))
+                self.ssh_copy_file(self.alpha, self.path_tcrules_t, self.path_tcrules, self.path_key_filename, self.login)
+                # self.ssh_restart_service(self.alpha, 'shorewall', 'yes')
+                # self.ssh_restart_service(self.alpha, 'ipsec', 'no')
+                self.ssh_replace_right(self.path_ipsec_conf, self.path_key_filename, self.login)
                 self.send_mail('Trigger: Moved to Primary provider', 'Current provider: {}\n'.
-                               format(self.read_file('/opt/template-vpn/log/current-state.txt')))
+                               format(self.read_file(self.path_current_name_provider)))
+                self.send_mail('Trigger: Status VPN', 'Status VPN: Up\Down: {}\n'.format(self.check_channel_vpn(
+                    self.vpn_list, self.ip_reserve_loc_alias, self.path_current_name_provider, triger='triger')))
             else:
                 if self.ping(self.ip_prim_loc_alias, self.ping_google_ns) == 0:
                     self.write_log_status(self.path_log_primary, '0')
@@ -366,11 +397,25 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
 
 
 b = ChangeProvider()
-if 'prov1' in b.read_file(b.current_name_provider):
+if '' in b.read_file(b.path_current_name_provider):
     b.switch_to_reserve()
     print 'sw to reserve'
-elif 'prov2' in b.read_file(b.current_name_provider):
+elif '' in b.read_file(b.path_current_name_provider):
     b.switch_to_primary()
     print 'sw to primary'
 else:
     pass
+
+'''
+config = paramiko.SSHConfig()
+config.parse(open(os.path.expanduser('~/.ssh/config')))
+host = config.lookup('host')
+print host
+ssh = paramiko.SSHClient()
+ssh.load_system_host_keys()
+ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+ssh.connect(host['hostname'], username=host['user'], key_filename='/root/.ssh/id_rsa')
+stdin, stdout, stderr = ssh.exec_command('ifconfig')`
+print stdout.read()
+ssh.close()
+'''
