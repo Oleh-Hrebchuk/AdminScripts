@@ -1,11 +1,60 @@
 import os
-import paramiko
+import requests
 import socket
 import smtplib
+import base64
+import json
+import pickle
 from email.mime.text import MIMEText
 import datetime
-import ConfigParser
 import ast
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+import paramiko
+import ConfigParser
+
+
+class SMS(object):
+    def __init__(self, login, passwd):
+        self.phone = login
+        self.passwd = passwd
+
+    def create_connect_alpha(self):
+        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        session = requests.Session()
+        data = {
+            'phone': self.phone,
+            'password': self.passwd
+        }
+        headers = {
+            'Referer': 'https://alphasms.com.ua/',
+        }
+        session.post('https://alphasms.com.ua/ajax/login/', data=data, headers=headers, verify=False)
+        return session
+
+    def send_sms_message(self, rcpt, body):
+        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        connect = self.create_connect_alpha()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:38.0) Gecko/20100101 Firefox/38.0 Iceweasel/38.7.1',
+            'Content-Type': 'application/json;charset=utf-8',
+            'Referer': 'https://alphasms.com.ua/panel/settings/',
+        }
+        list_rcpt="""""".strip()
+        for number in rcpt:
+            list_rcpt = list_rcpt+"""<msg recipient="{}" sender="AlphaSMS" type="0">{}</msg>\n""".format(number, body)
+        texts = """
+        <?xml version="1.0" encoding="utf-8" ?>
+        <package login="{}" password="{}">
+        <message>
+        {}
+        </message>
+        </package>
+        """.format(self.phone, self.passwd, list_rcpt)
+        encode = base64.b64encode(texts)
+        data = {"data": encode}
+        connect.post('https://alphasms.com.ua/panelUtils/validatexml/', headers=headers, data=json.dumps(data),
+                                 verify=False)
+        connect.close()
 
 
 class FileManagement(object):
@@ -173,7 +222,7 @@ class SSHManager(FileManagement):
         try:
             ssh_connect = self.create_ssh_connection(host, login, key_filename)
             sftp = ssh_connect.open_sftp()
-            #backup tcrules
+            # backup tcrules
             with sftp.open(dst_dir, 'r')as f:
                 data = f.read()
             if 'tc-rulses-core' in data:
@@ -283,7 +332,6 @@ class SSHManager(FileManagement):
                         self.add_to_file(self.path_error_log, str(self.date_log()) + ' ' + str(e) + ' ' + host + '\n')
                         self.send_mail('Trigger: Script execution error', 'Current provider: {}\n'.
                                        format(str(e)))
-
                     finally:
                         if ssh:
                             ssh.close()
@@ -291,7 +339,7 @@ class SSHManager(FileManagement):
                 continue
 
 
-class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
+class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig, SMS):
     def __init__(self):
         """
         :param ping_vpn: This variable is ip which we check if vpn is alive.
@@ -328,12 +376,16 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
         self.path_tcrules_uarnet_t = self.get_value_confing('work-file', 'tcrules_uarnet_t')
         self.path_tcrules_t = self.get_value_confing('work-file', 'tcrules_t')
         self.path_tcrules = self.get_value_confing('work-file', 'tcrules')
+        super(SMS,self).__init__()
+        self.phone = self.get_value_confing('alpha-sms', 'phone')
+        self.passwd = self.get_value_confing('alpha-sms', 'passwd')
 
     def switch_to_reserve(self):
         """
         This method switch from primary provider to reserve provider and restart shorewall and ipsec on remote regions.
         :return:
         """
+        self.send_sms_message(['+380975448562'], 'kyki')
         if self.ping(self.ip_prim_loc_alias, '8.8.8.3') == 0:
             self.write_log_status(self.path_log_primary, '0')
         else:
@@ -344,7 +396,8 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
                 self.ssh_replace_left(self.alpha, self.path_ipsec_conf, self.ip_gate_reserve, 'left = ',
                                       self.path_key_filename, self.login)
                 self.write_file_w(self.path_current_name_provider, str(self.ip_gate_reserve))
-                self.ssh_copy_file(self.alpha, self.path_tcrules_wnet_t, self.path_tcrules, self.path_key_filename, self.login)
+                self.ssh_copy_file(self.alpha, self.path_tcrules_wnet_t, self.path_tcrules, self.path_key_filename,
+                                   self.login)
                 # self.ssh_restart_service(self.alpha, 'shorewall', 'yes')
                 # self.ssh_restart_service(self.alpha,'ipsec', 'no')
                 self.ssh_replace_right(self.path_ipsec_conf, self.path_key_filename, self.login)
@@ -359,6 +412,7 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
         This method revert to primary provider after repaired channel internet.
         :return: None
         """
+        #self.send_sms_message(['+380975448562'], 'kyki')
         if self.ping(self.ip_prim_loc_alias, self.ping_google_ns) == 0 and self.ping(self.ip_reserve_loc_alias,
                                                                                      self.ping_google_ns) == 1:
             self.ssh_replace_data(self.alpha, self.path_shorewall_hosts, self.eth_reserve, self.eth_primary,
@@ -366,7 +420,8 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
             self.ssh_replace_left(self.alpha, self.path_ipsec_conf, self.ip_gate_primary, 'left = ',
                                   self.path_key_filename, self.login)
             self.write_file_w(self.path_current_name_provider, str(self.ip_gate_primary))
-            self.ssh_copy_file(self.alpha, self.path_tcrules_uarnet_t, self.path_tcrules, self.path_key_filename, self.login)
+            self.ssh_copy_file(self.alpha, self.path_tcrules_uarnet_t, self.path_tcrules, self.path_key_filename,
+                               self.login)
             # self.ssh_restart_service(self.alpha, 'shorewall', 'yes')
             # self.ssh_restart_service(self.alpha, 'ipsec', 'no')
             self.ssh_replace_right(self.path_ipsec_conf, self.path_key_filename, self.login)
@@ -381,7 +436,8 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
                 self.ssh_replace_left(self.alpha, self.path_ipsec_conf, self.ip_gate_primary, 'left = ',
                                       self.path_key_filename, self.login)
                 self.write_file_w(self.path_current_name_provider, str(self.ip_gate_primary))
-                self.ssh_copy_file(self.alpha, self.path_tcrules_t, self.path_tcrules, self.path_key_filename, self.login)
+                self.ssh_copy_file(self.alpha, self.path_tcrules_t, self.path_tcrules, self.path_key_filename,
+                                   self.login)
                 # self.ssh_restart_service(self.alpha, 'shorewall', 'yes')
                 # self.ssh_restart_service(self.alpha, 'ipsec', 'no')
                 self.ssh_replace_right(self.path_ipsec_conf, self.path_key_filename, self.login)
@@ -395,14 +451,14 @@ class ChangeProvider(SSHManager, CheckChannel, MailSender, GetConfig):
                 else:
                     self.write_log_status(self.path_log_primary, '1')
 
-
 b = ChangeProvider()
-if '' in b.read_file(b.path_current_name_provider):
+
+if 'prov1' in b.read_file(b.path_current_name_provider):
     b.switch_to_reserve()
     print 'sw to reserve'
-elif '' in b.read_file(b.path_current_name_provider):
-    b.switch_to_primary()
+elif 'prov2' in b.read_file(b.path_current_name_provider):
     print 'sw to primary'
+    b.switch_to_primary()
 else:
     pass
 
@@ -419,3 +475,4 @@ stdin, stdout, stderr = ssh.exec_command('ifconfig')`
 print stdout.read()
 ssh.close()
 '''
+
